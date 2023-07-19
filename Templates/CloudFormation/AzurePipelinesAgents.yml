@@ -1,0 +1,618 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+            default: "Azure DevOps Build Agent parameters"
+        Parameters:
+          - AzureDevOpsAgentURLParameterName
+          - AzureDevOpsPATParameterName
+          - AzureDevOpsAgentPoolName
+          - AzureDevOpsOrganizationURL
+      - Label:
+            default: "Instance Launch Template Parameters"
+        Parameters:
+          - AmiIdParameterName
+          - InstanceType
+          - Subnets
+          - SecurityGroup
+      - Label:
+            default: "Scheduled scale in parameters"
+        Parameters:
+          - ScheduleScaleInCron
+          - ScaleInDesiredCapacity
+          - ScaleInMinCapacity
+          - ScaleInMaxCapacity
+      - Label:
+            default: "Scheduled scale out parameters"
+        Parameters:
+          - ScheduleScaleOutCron
+          - ScaleOutDesiredCapacity
+          - ScaleOutMinCapacity
+          - ScaleOutMaxCapacity
+Parameters:
+  AzureDevOpsAgentURLParameterName:
+    Type: String
+    Description: "(Required) The name of the String Systems Manager Parameter that contains the URL to download the Azure DevOps Build Agent."
+  AzureDevOpsPATParameterName:
+    Type: String
+    Description: "(Required) The name of the SecureString Systems Manager Parameter that contains the Azure DevOps Agent personal access token (PAT)."
+  AzureDevOpsAgentPoolName:
+    Type: String
+    Description: "(Required) pool name for the Azure DevOps Pipelines agents to join."
+  AzureDevOpsOrganizationURL:
+    Type: String
+    Description: "(Required) URL of the server. For example: https://dev.azure.com/myorganization or https://my-azure-devops-server/tfs."
+  AmiIdParameterName:
+    Description: Region specific image from the Parameter Store
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-windows-latest/Windows_Server-2022-English-Full-Base'
+  InstanceType:
+    Description: Amazon EC2 instance type for the instances
+    Type: String
+    AllowedValues:
+      - t3.micro
+      - t3.small
+      - t3.medium
+      - t3.large
+    Default: t3.medium
+  Subnets:
+    Type: 'List<AWS::EC2::Subnet::Id>'
+    Description: A list of subnets for the Auto Scaling group
+  SecurityGroup:
+    Description: List of Security Groups to add to EC2 instance
+    Type: List<AWS::EC2::SecurityGroup::Id>
+  ScheduleScaleOutCron:
+    Type: String
+    Description: >-
+      The cron expression to use for the scheduled scaling out event in UTC. For more information about this format, see http://crontab.org/.
+    Default: "0 7 * * *"
+  ScaleOutMaxCapacity:
+    Type: Number
+    Description: >-
+      The auto scaling Max Size when scale out.
+  ScaleOutMinCapacity:
+    Type: Number
+    Description: >-
+      The auto scaling Min Size when scale out.
+  ScaleOutDesiredCapacity:
+    Type: Number
+    Description: >-
+      The auto scaling Desired Capacity when scale out.
+  ScheduleScaleInCron:
+    Type: String
+    Description: >-
+      The cron expression to use for the scheduled scale in event in UTC. For more information about this format, see http://crontab.org/.
+    Default: "0 19 * * *"
+  ScaleInMaxCapacity:
+    Type: Number
+    Description: >-
+      The auto scaling Max Size when scale in.
+  ScaleInMinCapacity:
+    Type: Number
+    Description: >-
+      The auto scaling Min Size when scale in.
+  ScaleInDesiredCapacity:
+    Type: Number
+    Description: >-
+      The auto scaling Desired Capacity when scale in.
+Resources:
+  EventBridgeRuleRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - events.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Policies:
+      - PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - ssm:StartAutomationExecution
+            Resource:
+              - Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:automation-definition/${AWSSystemsManagerAutomationDocumentScaleOut}:$DEFAULT
+              - Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:automation-definition/${AWSSystemsManagerAutomationDocumentScaleIn}:$DEFAULT
+        PolicyName: Start-SSM-Automation-Policy
+      - PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - iam:PassRole
+            Resource:
+              !GetAtt AWSSystemsManagerAutomationRole.Arn
+        PolicyName: Pass-Role-SSM-Automation-Policy
+      Tags:
+        - Key: CloudFormation StackId
+          Value: !Ref AWS::StackId
+  AWSSystemsManagerAutomationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - ssm.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Policies:
+      - PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - ssm:DescribeInstanceInformation
+            - ssm:ListCommands
+            - ssm:ListCommandInvocations
+            Resource: "*"
+          - Effect: Allow
+            Action:
+            - ssm:SendCommand
+            Resource:
+              - Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-RunPowerShellScript
+              - Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-RunShellScript
+          - Action:
+            - ssm:SendCommand
+            Resource:
+              Fn::Sub: arn:${AWS::Partition}:ec2:*:*:instance/*
+            Effect: Allow
+        PolicyName: SSM-Automation-Policy
+      - PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - autoscaling:CompleteLifecycleAction
+            Resource:
+              Fn::Sub: arn:${AWS::Partition}:autoscaling:${AWS::Region}:${AWS::AccountId}:autoScalingGroup:*:autoScalingGroupName/${AzureDevOpsAgentPoolASG}
+        PolicyName: SSM-Automation-Permission-to-CompleteLifecycle-Policy
+      Tags:
+        - Key: CloudFormation StackId
+          Value: !Ref AWS::StackId
+  SSMInstanceProfileRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore'
+      Tags:
+        - Key: CloudFormation StackId
+          Value: !Ref AWS::StackId
+  SSMInstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Roles:
+        - !Ref SSMInstanceProfileRole
+  AzureDevOpsAgentPoolASGLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        ImageId: !Ref AmiIdParameterName
+        InstanceType: !Ref InstanceType
+        IamInstanceProfile:
+          Arn: !GetAtt
+            - SSMInstanceProfile
+            - Arn
+        SecurityGroupIds: !Ref SecurityGroup
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+            - Key: Name
+              Value: !Ref AzureDevOpsAgentPoolName
+  AzureDevOpsAgentPoolASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref AzureDevOpsAgentPoolASGLaunchTemplate
+        Version: !GetAtt AzureDevOpsAgentPoolASGLaunchTemplate.LatestVersionNumber
+      MaxSize: !Ref ScaleInMaxCapacity
+      MinSize: '0'
+      DesiredCapacity: '0'
+      VPCZoneIdentifier: !Ref Subnets
+      LifecycleHookSpecificationList:
+        - LifecycleHookName: LifeCycleHookScaleIn
+          LifecycleTransition: autoscaling:EC2_INSTANCE_TERMINATING
+          DefaultResult: ABANDON
+        - LifecycleHookName: LifeCycleHookScaleOut
+          LifecycleTransition: autoscaling:EC2_INSTANCE_LAUNCHING
+          DefaultResult: ABANDON
+  AWSSystemsManagerAutomationDocumentScaleIn:
+    Type: AWS::SSM::Document
+    Properties:
+      DocumentType: Automation
+      Content:
+        schemaVersion: '0.3'
+        assumeRole: "{{AutomationAssumeRole}}"
+        description: This Document Created as part of CloudFormation stack.
+          This document will remove the Azure Pipelines agent from the agent pool.
+          Then it will send a signal to the LifeCycleHook to terminate the instance
+        parameters:
+          InstanceId:
+            type: String
+          ASGName:
+            type: String
+            default:
+              Ref: AzureDevOpsAgentPoolASG
+            description: The name of the Auto Scaling Group.
+          LCHName:
+            type: String
+            default: LifeCycleHookScaleIn
+            description: The name of the Life Cycle Hook.
+          AgentToken:
+            type: String
+            default:
+              Ref: AzureDevOpsPATParameterName
+            description: The name of the Secure Parameter that contains the Azure DevOps personal access token (PAT)
+          AutomationAssumeRole:
+            type: String
+            default:
+              !GetAtt AWSSystemsManagerAutomationRole.Arn
+            description: "(Required) The ARN of the role that allows Automation to
+              perform the actions on your behalf."
+        mainSteps:
+        - name: verifyInstancesOnlineSSM
+          action: aws:waitForAwsResourceProperty
+          timeoutSeconds: 600
+          onFailure: Continue
+          inputs:
+            Service: ssm
+            Api: DescribeInstanceInformation
+            InstanceInformationFilterList:
+              - key: InstanceIds
+                valueSet:
+                  - '{{ InstanceId }}'
+            PropertySelector: '$.InstanceInformationList[0].PingStatus'
+            DesiredValues:
+              - Online
+          nextStep: GetInstance
+        - name: GetInstance
+          action: aws:executeAwsApi
+          onFailure: Continue
+          inputs:
+            Service: ssm
+            Api: DescribeInstanceInformation
+            Filters:
+            - Key: InstanceIds
+              Values: ["{{ InstanceId }}"]
+          outputs:
+          - Name: myInstance
+            Selector: "$.InstanceInformationList[0].InstanceId"
+            Type: String
+          - Name: platform
+            Selector: "$.InstanceInformationList[0].PlatformType"
+            Type: String
+        - name: ChooseOSforCommands
+          action: aws:branch
+          inputs:
+            Choices:
+            - NextStep: runPowerShellCommand
+              Variable: "{{GetInstance.platform}}"
+              StringEquals: Windows
+            - NextStep: runShellCommand
+              Variable: "{{GetInstance.platform}}"
+              StringEquals: Linux
+            Default: ContinueLifecycleAction
+        - name: runPowerShellCommand
+          action: aws:runCommand
+          nextStep: ContinueLifecycleAction
+          onFailure: step:ContinueLifecycleAction
+          inputs:
+            DocumentName: AWS-RunPowerShellScript
+            InstanceIds:
+            - "{{ InstanceId }}"
+            Parameters:
+              executionTimeout: '7200'
+              commands: |-
+                $ErrorActionPreference="Stop"
+                If(-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent() ).IsInRole( [Security.Principal.WindowsBuiltInRole] "Administrator")){ throw "Run command in an administrator PowerShell prompt"}
+                If($PSVersionTable.PSVersion -lt (New-Object System.Version("3.0"))){ throw "The minimum version of Windows PowerShell that is required by the script (3.0) does not match the currently running version of Windows PowerShell." }
+                If(-NOT (Test-Path $env:SystemDrive\'azagent')){mkdir $env:SystemDrive\'azagent'}
+                cd $env:SystemDrive\'azagent';
+                $DefaultProxy=[System.Net.WebRequest]::DefaultWebProxy
+                $securityProtocol=@()
+                $securityProtocol+=[Net.ServicePointManager]::SecurityProtocol
+                $securityProtocol+=[Net.SecurityProtocolType]::Tls12
+                [Net.ServicePointManager]::SecurityProtocol=$securityProtocol
+                $token = (Get-SSMParameterValue -Name {{ AgentToken }} -WithDecryption $True).Parameters[0].Value
+                .\config.cmd remove --unattended --auth PAT --token $token
+        - name: runShellCommand
+          action: aws:runCommand
+          nextStep: ContinueLifecycleAction
+          onFailure: step:ContinueLifecycleAction
+          inputs:
+            DocumentName: AWS-RunShellScript
+            InstanceIds:
+            - "{{ InstanceId }}"
+            Parameters:
+              executionTimeout: '7200'
+              commands: |-
+                #remove
+                cd /tmp/azagent
+                ./svc.sh stop
+                ./svc.sh uninstall
+                export AGENT_ALLOW_RUNASROOT="1"
+                token=$(aws ssm get-parameter --name {{ AgentToken }} --with-decryption --query "Parameter.Value" --output text)
+                ./config.sh remove --unattended --auth PAT --token $token
+        - name: ContinueLifecycleAction
+          action: aws:executeAwsApi
+          inputs:
+            Service: autoscaling
+            Api: CompleteLifecycleAction
+            AutoScalingGroupName: "{{ ASGName }}"
+            InstanceId: "{{ InstanceId }}"
+            LifecycleActionResult: CONTINUE
+            LifecycleHookName: "{{ LCHName }}"
+  AWSSystemsManagerAutomationDocumentScaleOut:
+    Type: AWS::SSM::Document
+    Properties:
+      DocumentType: Automation
+      Content:
+        schemaVersion: '0.3'
+        assumeRole: "{{AutomationAssumeRole}}"
+        description: This Document Created as part of CloudFormation stack.
+          This document install the Azure Pipelines agent software on the
+          instance, send a signal to the LifeCycleHook to put the instance InService
+        parameters:
+          InstanceId:
+            type: String
+          ASGName:
+            type: String
+            default:
+              Ref: AzureDevOpsAgentPoolASG
+            description: The name of the Auto Scaling Group.
+          LCHName:
+            type: String
+            default: LifeCycleHookScaleOut
+            description: The name of the Life Cycle Hook.
+          AgentURL:
+            type: String
+            default:
+              Ref: AzureDevOpsAgentURLParameterName
+            description: The SSM Parameter containing the URL to download the Azure DevOps Agent
+          AgentToken:
+            type: String
+            default:
+              Ref: AzureDevOpsPATParameterName
+            description: The name of the SecureString Parameter that contains the Personal Access Token (PAT)
+              of DomainUserName
+          AgentPool:
+            type: String
+            default:
+              Ref: AzureDevOpsAgentPoolName
+            description: The name of the SecureString Parameter that contains the Agent Pool Name
+              of DomainUserName
+          OrganizationURL:
+            type: String
+            default:
+              Ref: AzureDevOpsOrganizationURL
+            description: "URL of the server. For example: https://dev.azure.com/myorganization or http://my-azure-devops-server:8080/tfs"
+          AutomationAssumeRole:
+            type: String
+            default:
+              !GetAtt AWSSystemsManagerAutomationRole.Arn
+            description: "(Required) The ARN of the role that allows Automation to
+              perform the actions on your behalf."
+        mainSteps:
+        - name: verifyInstancesOnlineSSM
+          action: aws:waitForAwsResourceProperty
+          timeoutSeconds: 600
+          onFailure: Continue
+          inputs:
+            Service: ssm
+            Api: DescribeInstanceInformation
+            InstanceInformationFilterList:
+              - key: InstanceIds
+                valueSet:
+                  - '{{ InstanceId }}'
+            PropertySelector: '$.InstanceInformationList[0].PingStatus'
+            DesiredValues:
+              - Online
+          nextStep: GetInstance
+        - name: GetInstance
+          action: aws:executeAwsApi
+          onFailure: Continue
+          inputs:
+            Service: ssm
+            Api: DescribeInstanceInformation
+            Filters:
+            - Key: InstanceIds
+              Values: ["{{ InstanceId }}"]
+          outputs:
+          - Name: myInstance
+            Selector: "$.InstanceInformationList[0].InstanceId"
+            Type: String
+          - Name: platform
+            Selector: "$.InstanceInformationList[0].PlatformType"
+            Type: String
+        - name: ChooseOSforCommands
+          action: aws:branch
+          inputs:
+            Choices:
+            - NextStep: runPowerShellCommand
+              Variable: "{{GetInstance.platform}}"
+              StringEquals: Windows
+            - NextStep: runShellCommand
+              Variable: "{{GetInstance.platform}}"
+              StringEquals: Linux
+            Default: AbandonLifecycleAction
+        - name: runPowerShellCommand
+          action: aws:runCommand
+          nextStep: ContinueLifecycleAction
+          onFailure: step:AbandonLifecycleAction
+          inputs:
+            DocumentName: AWS-RunPowerShellScript
+            InstanceIds:
+            - "{{ InstanceId }}"
+            Parameters:
+              executionTimeout: '7200'
+              commands: |-
+                $ErrorActionPreference="Stop"
+                If(-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent() ).IsInRole( [Security.Principal.WindowsBuiltInRole] "Administrator")){ throw "Run command in an administrator PowerShell prompt"}
+                If($PSVersionTable.PSVersion -lt (New-Object System.Version("3.0"))){ throw "The minimum version of Windows PowerShell that is required by the script (3.0) does not match the currently running version of Windows PowerShell." }
+                If(-NOT (Test-Path $env:SystemDrive\'azagent')){mkdir $env:SystemDrive\'azagent'}
+                cd $env:SystemDrive\'azagent';
+                #for($i=1; $i -lt 100; $i++){$destFolder="A"+$i.ToString()
+                #if(-NOT (Test-Path ($destFolder))){mkdir $destFolder;cd $destFolder;break;}}
+                $agentZip="$PWD\agent.zip";$DefaultProxy=[System.Net.WebRequest]::DefaultWebProxy
+                $securityProtocol=@()
+                $securityProtocol+=[Net.ServicePointManager]::SecurityProtocol
+                $securityProtocol+=[Net.SecurityProtocolType]::Tls12
+                [Net.ServicePointManager]::SecurityProtocol=$securityProtocol
+                $WebClient=New-Object Net.WebClient
+                $Uri = (Get-SSMParameterValue -Name {{ AgentURL }}).Parameters[0].Value
+                if($DefaultProxy -and (-not $DefaultProxy.IsBypassed($Uri))){$WebClient.Proxy= New-Object Net.WebProxy($DefaultProxy.GetProxy($Uri).OriginalString, $True);}
+                $WebClient.DownloadFile($Uri, $agentZip)
+                Add-Type -AssemblyName System.IO.Compression.FileSystem
+                [System.IO.Compression.ZipFile]::ExtractToDirectory( $agentZip, "$PWD")
+                $token = (Get-SSMParameterValue -Name {{ AgentToken }} -WithDecryption $True).Parameters[0].Value
+                .\config.cmd --unattended --pool {{ AgentPool }} --agent $env:COMPUTERNAME --runAsService --windowsLogonAccount "NT AUTHORITY\SYSTEM" --work '_work' --url {{ OrganizationURL }} --auth PAT --token $token
+                Remove-Item $agentZip
+
+                # You can remove the remaing line of code if you do not want the Git client automatically installed
+                Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+                C:\ProgramData\chocolatey\bin\choco install git.install -y -f  -Wait
+
+                # You can remove the remaing line of code if you do not want the Visual Studio Build tools automatically installed.
+                $vs_buildtools="$PWD\vs_buildtools.exe";
+                wget https://aka.ms/vs/17/release/vs_buildtools.exe -UseBasicParsing -outfile $vs_buildtools
+                & $vs_buildtools --quiet --allWorkloads --includeOptional
+        - name: runShellCommand
+          action: aws:runCommand
+          nextStep: ContinueLifecycleAction
+          onFailure: step:AbandonLifecycleAction
+          inputs:
+            DocumentName: AWS-RunShellScript
+            InstanceIds:
+            - "{{ InstanceId }}"
+            Parameters:
+              executionTimeout: '7200'
+              commands: |-
+                #Add an initial pause to let yum finish initializing
+                sleep 1m;
+                #install Prerequisities
+                yum install dotnet-sdk-6.0 -y;
+                #install agent
+                mkdir /tmp/azagent;
+                chown ec2-user /tmp/azagent;
+                cd /tmp/azagent;
+                Uri=$(aws ssm get-parameter --name {{ AgentURL }} --query "Parameter.Value" --output text);
+                sudo -u ec2-user wget -q $Uri -O az_agent.tar.gz;
+                sudo -u ec2-user tar zvxf az_agent.tar.gz;
+                # export AGENT_ALLOW_RUNASROOT="1";
+                token=$(aws ssm get-parameter --name {{ AgentToken }} --with-decryption --query "Parameter.Value" --output text);
+                sudo -i -u ec2-user /tmp/azagent/env.sh;
+                sudo -i -u ec2-user /tmp/azagent/config.sh --unattended --url {{ OrganizationURL }} --auth pat --token $token --pool {{ AgentPool }};
+                /tmp/azagent/svc.sh install ec2-user;
+                /tmp/azagent/svc.sh start;
+                yum install git -y;
+        - name: ContinueLifecycleAction
+          action: aws:executeAwsApi
+          isEnd: true
+          inputs:
+            Service: autoscaling
+            Api: CompleteLifecycleAction
+            AutoScalingGroupName: "{{ ASGName }}"
+            InstanceId: "{{ InstanceId }}"
+            LifecycleActionResult: CONTINUE
+            LifecycleHookName: "{{ LCHName }}"
+        - name: AbandonLifecycleAction
+          action: aws:executeAwsApi
+          isEnd: true
+          inputs:
+            Service: autoscaling
+            Api: CompleteLifecycleAction
+            AutoScalingGroupName: "{{ ASGName }}"
+            InstanceId: "{{ InstanceId }}"
+            LifecycleActionResult:  ABANDON
+            LifecycleHookName: "{{ LCHName }}"
+  EventBridgeRuleScaleIn:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Amazon EventBridge rule that will trigger AWS Systems Manager Automation document when an instance go in Terminate:wait. This is created as a part of a CloudFormation.
+      EventPattern:
+        source:
+        - aws.autoscaling
+        detail-type:
+        - EC2 Instance-terminate Lifecycle Action
+        detail:
+          AutoScalingGroupName:
+          - Ref: AzureDevOpsAgentPoolASG
+      Targets:
+      - Arn:
+          Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:automation-definition/${AWSSystemsManagerAutomationDocumentScaleIn}:$DEFAULT
+        RoleArn:
+          !GetAtt EventBridgeRuleRole.Arn
+        Id: TargetFunctionV1
+        InputTransformer:
+          InputPathsMap:
+            instanceid: "$.detail.EC2InstanceId"
+          InputTemplate:
+            Fn::Join:
+            - ''
+            - - '{"InstanceId":[<instanceid>]}'
+  EventBridgeRuleScaleOut:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Amazon EventBridge rule that will trigger AWS Systems Manager Automation document when an instance go in Pending:Wait. This is created as a part of a CloudFormation.
+      EventPattern:
+        source:
+        - aws.autoscaling
+        detail-type:
+        - EC2 Instance-launch Lifecycle Action
+        detail:
+          AutoScalingGroupName:
+          - Ref: AzureDevOpsAgentPoolASG
+      Targets:
+      - Arn:
+          Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:automation-definition/${AWSSystemsManagerAutomationDocumentScaleOut}:$DEFAULT
+        RoleArn:
+          !GetAtt EventBridgeRuleRole.Arn
+        Id: TargetFunctionV1
+        InputTransformer:
+          InputPathsMap:
+            instanceid: "$.detail.EC2InstanceId"
+          InputTemplate:
+            Fn::Join:
+            - ''
+            - - '{"InstanceId":[<instanceid>]}'
+  ScheduledActionOut:
+    Type: AWS::AutoScaling::ScheduledAction
+    Properties:
+      AutoScalingGroupName: !Ref AzureDevOpsAgentPoolASG
+      MaxSize: !Ref ScaleOutMaxCapacity
+      MinSize: !Ref ScaleOutMinCapacity
+      DesiredCapacity: !Ref ScaleOutDesiredCapacity
+      Recurrence: !Ref ScheduleScaleOutCron
+  ScheduledActionIn:
+    Type: AWS::AutoScaling::ScheduledAction
+    Properties:
+      AutoScalingGroupName: !Ref AzureDevOpsAgentPoolASG
+      MaxSize: !Ref ScaleInMaxCapacity
+      MinSize: !Ref ScaleInMinCapacity
+      DesiredCapacity: !Ref ScaleInDesiredCapacity
+      Recurrence: !Ref ScheduleScaleInCron
+Outputs:
+  AutoScalingGroup:
+    Description: The name to the Auto Scaling group.
+    Value: !Ref AzureDevOpsAgentPoolASG
+  InstanceProfileName:
+    Description: The name to the IAM instance profile.
+    Value: !Ref SSMInstanceProfile
