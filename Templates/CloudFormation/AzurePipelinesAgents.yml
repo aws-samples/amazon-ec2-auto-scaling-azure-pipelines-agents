@@ -34,10 +34,10 @@ Metadata:
 Parameters:
   AzureDevOpsAgentURLParameterName:
     Type: String
-    Description: "(Required) The name of the String Systems Manager Parameter that contains the URL to download the Azure DevOps Build Agent."
+    Description: "(Required) The name of the Systems Manager Parameter that contains the URL to download the Azure DevOps Build Agent."
   AzureDevOpsPATParameterName:
     Type: String
-    Description: "(Required) The name of the SecureString Systems Manager Parameter that contains the Azure DevOps Agent personal access token (PAT)."
+    Description: "(Required) The name of the Systems Manager Parameter that contains the Azure DevOps Agent personal access token (PAT)."
   AzureDevOpsAgentPoolName:
     Type: String
     Description: "(Required) pool name for the Azure DevOps Pipelines agents to join."
@@ -234,7 +234,7 @@ Resources:
         - LifecycleHookName: LifeCycleHookScaleOut
           LifecycleTransition: autoscaling:EC2_INSTANCE_LAUNCHING
           DefaultResult: ABANDON
-  AWSSystemsManagerAutomationDocumentScaleIn:
+  AzurePipelineScaleIn:
     Type: AWS::SSM::Document
     Properties:
       DocumentType: Automation
@@ -360,7 +360,7 @@ Resources:
             InstanceId: "{{ InstanceId }}"
             LifecycleActionResult: CONTINUE
             LifecycleHookName: "{{ LCHName }}"
-  AWSSystemsManagerAutomationDocumentScaleOut:
+  AzurePipelineScaleOut:
     Type: AWS::SSM::Document
     Properties:
       DocumentType: Automation
