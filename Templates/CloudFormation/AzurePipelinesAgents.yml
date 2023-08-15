@@ -34,10 +34,10 @@ Metadata:
 Parameters:
   AzureDevOpsAgentURLParameterName:
     Type: String
-    Description: "(Required) The name of the Systems Manager Parameter that contains the URL to download the Azure DevOps Build Agent."
+    Description: "(Required) The name of the String Systems Manager Parameter that contains the URL to download the Azure DevOps Build Agent."
   AzureDevOpsPATParameterName:
     Type: String
-    Description: "(Required) The name of the Systems Manager Parameter that contains the Azure DevOps Agent personal access token (PAT)."
+    Description: "(Required) The name of the SecureString Systems Manager Parameter that contains the Azure DevOps Agent personal access token (PAT)."
   AzureDevOpsAgentPoolName:
     Type: String
     Description: "(Required) pool name for the Azure DevOps Pipelines agents to join."
@@ -56,6 +56,7 @@ Parameters:
       - t3.small
       - t3.medium
       - t3.large
+      - m5.large
     Default: t3.medium
   Subnets:
     Type: 'List<AWS::EC2::Subnet::Id>'
@@ -118,8 +119,8 @@ Resources:
             Action:
             - ssm:StartAutomationExecution
             Resource:
-              - Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:automation-definition/${AWSSystemsManagerAutomationDocumentScaleOut}:$DEFAULT
-              - Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:automation-definition/${AWSSystemsManagerAutomationDocumentScaleIn}:$DEFAULT
+              - Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:automation-definition/${AzurePipelineScaleOut}:$DEFAULT
+              - Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:automation-definition/${AzurePipelineScaleIn}:$DEFAULT
         PolicyName: Start-SSM-Automation-Policy
       - PolicyDocument:
           Version: '2012-10-17'
@@ -212,6 +213,13 @@ Resources:
             - SSMInstanceProfile
             - Arn
         SecurityGroupIds: !Ref SecurityGroup
+        EbsOptimized: true
+        BlockDeviceMappings: 
+          - Ebs:
+              VolumeSize: 50
+              VolumeType: gp3
+              DeleteOnTermination: true
+            DeviceName: /dev/sda1
         TagSpecifications:
           - ResourceType: instance
             Tags:
@@ -345,7 +353,7 @@ Resources:
               executionTimeout: '7200'
               commands: |-
                 #remove
-                cd /tmp/azagent
+                cd /opt/azagent
                 ./svc.sh stop
                 ./svc.sh uninstall
                 export AGENT_ALLOW_RUNASROOT="1"
@@ -510,18 +518,17 @@ Resources:
                 #install Prerequisities
                 yum install dotnet-sdk-6.0 -y;
                 #install agent
-                mkdir /tmp/azagent;
-                chown ec2-user /tmp/azagent;
-                cd /tmp/azagent;
+                mkdir /opt/azagent;
+                chown ec2-user /opt/azagent;
+                cd /opt/azagent;
                 Uri=$(aws ssm get-parameter --name {{ AgentURL }} --query "Parameter.Value" --output text);
-                sudo -u ec2-user wget -q $Uri -O az_agent.tar.gz;
-                sudo -u ec2-user tar zvxf az_agent.tar.gz;
-                # export AGENT_ALLOW_RUNASROOT="1";
+                sudo -u ec2-user wget -q $Uri -O az_agent.tar.gz || exit 22;
+                sudo -u ec2-user tar zvxf az_agent.tar.gz || exit 22;
                 token=$(aws ssm get-parameter --name {{ AgentToken }} --with-decryption --query "Parameter.Value" --output text);
-                sudo -i -u ec2-user /tmp/azagent/env.sh;
-                sudo -i -u ec2-user /tmp/azagent/config.sh --unattended --url {{ OrganizationURL }} --auth pat --token $token --pool {{ AgentPool }};
-                /tmp/azagent/svc.sh install ec2-user;
-                /tmp/azagent/svc.sh start;
+                sudo -i -u ec2-user /opt/azagent/env.sh;
+                sudo -i -u ec2-user /opt/azagent/config.sh --unattended --url {{ OrganizationURL }} --auth pat --token $token --pool {{ AgentPool }} || exit 22;
+                /opt/azagent/svc.sh install ec2-user;
+                /opt/azagent/svc.sh start;
                 yum install git -y;
         - name: ContinueLifecycleAction
           action: aws:executeAwsApi
@@ -557,7 +564,7 @@ Resources:
           - Ref: AzureDevOpsAgentPoolASG
       Targets:
       - Arn:
-          Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:automation-definition/${AWSSystemsManagerAutomationDocumentScaleIn}:$DEFAULT
+          Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:automation-definition/${AzurePipelineScaleIn}:$DEFAULT
         RoleArn:
           !GetAtt EventBridgeRuleRole.Arn
         Id: TargetFunctionV1
@@ -582,7 +589,7 @@ Resources:
           - Ref: AzureDevOpsAgentPoolASG
       Targets:
       - Arn:
-          Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:automation-definition/${AWSSystemsManagerAutomationDocumentScaleOut}:$DEFAULT
+          Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:automation-definition/${AzurePipelineScaleOut}:$DEFAULT
         RoleArn:
           !GetAtt EventBridgeRuleRole.Arn
         Id: TargetFunctionV1
