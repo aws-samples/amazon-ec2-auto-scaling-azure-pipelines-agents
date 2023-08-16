@@ -1,10 +1,13 @@
 # Using Amazon EC2 Auto Scaling to Manage Azure Pipelines Agent Capacity
 
-This repo hosts templates written for the AWS Blog Post "[Using Amazon EC2 Auto Scaling to Manage Azure Pipelines Agent Capacity](https://aws.amazon.com/blogs/modernizing-with-aws/using-amazon-ec2-auto-scaling-to-manage-azure-pipelines-agent-capacity/)" published on the [Microsoft Workloads on AWS](https://aws.amazon.com/blogs/modernizing-with-aws/) blog channel. 
+This repo hosts templates written for the AWS Blog Post "[Using Amazon EC2 Auto Scaling to Manage Azure Pipelines Agent Capacity](https://aws.amazon.com/blogs/modernizing-with-aws/using-ec2-auto-scaling-to-manage-azure-pipelines-capacity/)" published on the [Microsoft Workloads on AWS](https://aws.amazon.com/blogs/modernizing-with-aws/) blog channel. 
 
 ## Overview
 This is a sample solution using that lets you deploy either Windows or Linux-based Azure Pipelines agents with an Auto Scaling group, corresponding to a single agent pool. The solution can be deployed in your AWS account. It creates an Auto Scaling group that will manage the Amazon EC2-based agents. There are two [AWS Systems Manager](https://aws.amazon.com/systems-manager/) [documents](https://docs.aws.amazon.com/systems-manager/latest/userguide/documents.html) provisioned that will respond to Auto Scaling group lifecycle events through the use of [Amazon EventBridge rules](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-rules.html). One runs on instance launch. It  installs both the latest .NET build tools and git, and registers it with Azure DevOps. The other document unregisters the agent, and then terminates it. These documents are configured both for Windows and Linux hosts, and will run the correct set of commands based on the OS of the agent being provisioned.
 
+<p align="center">
+  <img src="https://github.com/aws-samples/amazon-ec2-auto-scaling-azure-piplelines-agents/blob/main/AzurePipelinesAgentsDiagram.png">
+</p>
 
 ## Deployment
 ### CloudFormation
@@ -13,7 +16,16 @@ This is a sample solution using that lets you deploy either Windows or Linux-bas
 - You will need to supply three AWS Systems Manager Parameter Store parameters to store values used by this solution. You will need to use the SecureString parameter type for any information considered sensitive. You will need parameters that will contain.
     -	The URL used to download the latest version of the Azure DevOps agent installer.
     -	The Personal Access Token (PAT) for a user with permissions to register Azure Pipelines agents. You can review the documentation to learn [how to create a Personal Access Token](https://learn.microsoft.com/en-us/azure/devops/organizations/accounts/use-personal-access-tokens-to-authenticate?view=azure-devops). This parameter is required to be of type SecureString.
-    -	The ID of the AMI to be used for your agents.
+    -	This is the AWS Systems Manager Parameter store parameter where you store the AMI ID. If you are using a custom AMI that you have created to launch instances, then this will be a parameter that you create to store the AMI ID. If you wish to use the standard Windows or Linux template, you can use one of the public parameters that is automatically updated with the latest version of the AMI. You can learn [more in the documentation](https://docs.aws.amazon.com/systems-manager/latest/userguide/parameter-store-public-parameters-ami.html) on how to find the right parameter name for the AMI you want to use. Examples of latest AWS AMIs:
+
+<div class="center">
+    
+| Operating system | Parameter Name
+| :---: | ---
+| Amazon Linux 2023 | `/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64`
+| Windows 2022 | `/aws/service/ami-windows-latest/Windows_Server-2022-English-Full-Base`
+
+</div>
 -	An AWS Account that you have permissions to deploy this into.
 -	An Amazon VPC provisioned where your agents will be launched. The subnets that you specify will need internet connectivity. So if you intend to use private subnets, then ensure that there is a [NAT Gateway](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-nat-gateway.html) provisioned.
 
