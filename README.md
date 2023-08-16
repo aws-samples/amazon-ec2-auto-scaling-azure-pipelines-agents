@@ -9,6 +9,24 @@ This is a sample solution using that lets you deploy either Windows or Linux-bas
   <img src="https://github.com/aws-samples/amazon-ec2-auto-scaling-azure-piplelines-agents/blob/main/AzurePipelinesAgentsDiagram.png">
 </p>
 
+### Notes
+
+The provided automation document will configure the Azure Pipelines agents with the following software:
+
+**Windows**
+- Install [Git](https://git-scm.com/) using the [Chocolatey](https://community.chocolatey.org/) client
+- Install [Visual Studio Build Tools](https://aka.ms/vs/17/release/vs_BuildTools.exe) with all workloads selected
+
+
+The Windows installation has been tested on Windows Server 2022
+
+**Linux**
+- Install the [.NET 6.0](https://dotnet.microsoft.com/en-us/download/dotnet/6.0) SDK (required by the Azure Pipelines agent) using yum
+- Install Git using yum
+
+The Linux installation has been tested on Amazon Linux 2023. If you are using a Linux distribution that does not support yum, then you can alter the "AzurePipelineScaleOut" SSM document accordingly.
+
+
 ## Deployment
 ### CloudFormation
 #### Prerequisites
@@ -18,14 +36,13 @@ This is a sample solution using that lets you deploy either Windows or Linux-bas
     -	The Personal Access Token (PAT) for a user with permissions to register Azure Pipelines agents. You can review the documentation to learn [how to create a Personal Access Token](https://learn.microsoft.com/en-us/azure/devops/organizations/accounts/use-personal-access-tokens-to-authenticate?view=azure-devops). This parameter is required to be of type SecureString.
     -	This is the AWS Systems Manager Parameter store parameter where you store the AMI ID. If you are using a custom AMI that you have created to launch instances, then this will be a parameter that you create to store the AMI ID. If you wish to use the standard Windows or Linux template, you can use one of the public parameters that is automatically updated with the latest version of the AMI. You can learn [more in the documentation](https://docs.aws.amazon.com/systems-manager/latest/userguide/parameter-store-public-parameters-ami.html) on how to find the right parameter name for the AMI you want to use. Examples of latest AWS AMIs:
 
-<div class="center">
-    
-| Operating system | Parameter Name
-| :---: | ---
-| Amazon Linux 2023 | `/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64`
-| Windows 2022 | `/aws/service/ami-windows-latest/Windows_Server-2022-English-Full-Base`
+        | Operating system | Parameter Name
+        | :---: | ---
+        | Amazon Linux 2023 | `/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64`
+        | Windows 2022 | `/aws/service/ami-windows-latest/Windows_Server-2022-English-Full-Base`
 
-</div>
+
+
 -	An AWS Account that you have permissions to deploy this into.
 -	An Amazon VPC provisioned where your agents will be launched. The subnets that you specify will need internet connectivity. So if you intend to use private subnets, then ensure that there is a [NAT Gateway](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-nat-gateway.html) provisioned.
 
