@@ -293,6 +293,7 @@ Resources:
           nextStep: GetInstance
         - name: GetInstance
           action: aws:executeAwsApi
+          maxAttempts: 15
           onFailure: Continue
           inputs:
             Service: ssm
@@ -361,6 +362,7 @@ Resources:
                 ./config.sh remove --unattended --auth PAT --token $token
         - name: ContinueLifecycleAction
           action: aws:executeAwsApi
+          maxAttempts: 15
           inputs:
             Service: autoscaling
             Api: CompleteLifecycleAction
@@ -422,7 +424,7 @@ Resources:
         - name: verifyInstancesOnlineSSM
           action: aws:waitForAwsResourceProperty
           timeoutSeconds: 600
-          onFailure: Continue
+          onFailure: step:AbandonLifecycleAction
           inputs:
             Service: ssm
             Api: DescribeInstanceInformation
@@ -436,7 +438,8 @@ Resources:
           nextStep: GetInstance
         - name: GetInstance
           action: aws:executeAwsApi
-          onFailure: Continue
+          maxAttempts: 15
+          onFailure: step:AbandonLifecycleAction
           inputs:
             Service: ssm
             Api: DescribeInstanceInformation
@@ -532,6 +535,7 @@ Resources:
                 yum install git -y;
         - name: ContinueLifecycleAction
           action: aws:executeAwsApi
+          maxAttempts: 15
           isEnd: true
           inputs:
             Service: autoscaling
@@ -542,6 +546,7 @@ Resources:
             LifecycleHookName: "{{ LCHName }}"
         - name: AbandonLifecycleAction
           action: aws:executeAwsApi
+          maxAttempts: 15
           isEnd: true
           inputs:
             Service: autoscaling
